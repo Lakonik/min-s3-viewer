@@ -1,17 +1,23 @@
 # min-s3-viewer
 
-Tiny local server that serves static HTML/CSS/JS/assets from a private S3 bucket using your local AWS credentials (no signed URLs needed).
+A minimal local web server for browsing and viewing S3 buckets and files using your local AWS credentials.
 
-### Setup
+## Features
+
+- Browse all your S3 buckets across regions and navigate directory hierarchies
+- View files directly in the browser (HTML, images, etc.)
+- Works with private buckets using your local AWS credentials (environment variables, AWS SSO, etc.), no signed URLs needed
+
+## Setup
+
 ```bash
 npm ci    # or: npm install
 ```
 
-### Run
+## Usage
+
 ```bash
 node server.js
 ```
 
-### Usage
-
-Open: `http://localhost:8787/<bucket>/<key...>`
+Then open http://localhost:8787 to start browsing your S3 buckets.
