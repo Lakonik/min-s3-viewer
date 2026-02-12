@@ -6,7 +6,11 @@ const app = express();
 const port = process.env.PORT || 8787;
 
 // Uses standard AWS credential chain (env, ~/.aws, AWS_PROFILE, SSO, etc.)
-const s3 = new S3Client({ region: process.env.AWS_REGION });
+// followRegionRedirects automatically handles buckets in different regions
+const s3 = new S3Client({
+  region: process.env.AWS_REGION || "us-east-1",
+  followRegionRedirects: true
+});
 
 function parseBucketAndKey(reqPath) {
   // "/my-bucket/a/b/c.png" -> bucket="my-bucket", key="a/b/c.png"
