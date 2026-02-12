@@ -186,6 +186,13 @@ app.get(/.*/, async (req, res) => {
     // Try to fetch as file first
     try {
       const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+
+      // Check if client has a cached version (304 Not Modified)
+      if (req.headers["if-none-match"] && head.ETag && req.headers["if-none-match"] === head.ETag) {
+        res.status(304).end();
+        return;
+      }
+
       const contentType =
         head.ContentType ||
         mime.lookup(key) ||
@@ -222,5 +229,5 @@ app.get(/.*/, async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Open: http://localhost:${port}/<bucket>/<key...>`);
+  console.log(`Server running at http://localhost:${port}`);
 });
