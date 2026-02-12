@@ -1,5 +1,5 @@
 import express from "express";
-import { S3Client, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, ListBucketsCommand } from "@aws-sdk/client-s3";
 import mime from "mime-types";
 
 const app = express();
@@ -111,10 +111,54 @@ function formatBytes(bytes) {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
 }
 
-app.get("/", (req, res) => {
-  res
-    .status(200)
-    .send('Usage: /<bucket>/<key...>  e.g. /my-bucket/index.html');
+app.get("/", async (req, res) => {
+  try {
+    const result = await s3.send(new ListBucketsCommand({}));
+    const buckets = result.Buckets || [];
+
+    const rows = buckets.map(bucket => {
+      const bucketPath = `/${bucket.Name}`;
+      const creationDate = bucket.CreationDate ? bucket.CreationDate.toISOString().split('T')[0] : '-';
+      return `<tr><td><a href="${bucketPath}">📦 ${bucket.Name}</a></td><td>${creationDate}</td></tr>`;
+    }).join("\n      ");
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>S3 Buckets</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; }
+    h1 { font-size: 1.5rem; margin-bottom: 1.5rem; }
+    table { border-collapse: collapse; width: 100%; max-width: 900px; }
+    th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #ddd; background: #f5f5f5; }
+    td { padding: 0.5rem; border-bottom: 1px solid #eee; }
+    td:first-child { width: 70%; }
+    td:last-child { text-align: right; color: #666; }
+    a { color: #0066cc; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>S3 Buckets</h1>
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Created</th></tr>
+    </thead>
+    <tbody>
+      ${rows}
+    </tbody>
+  </table>
+</body>
+</html>`;
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error listing buckets");
+  }
 });
 
 app.get(/.*/, async (req, res) => {
