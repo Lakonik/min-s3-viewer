@@ -33,10 +33,11 @@ async function listS3Objects(bucket, prefix) {
   return {
     folders: result.CommonPrefixes || [],
     files: result.Contents || [],
+    isTruncated: result.IsTruncated || false,
   };
 }
 
-function generateIndexHtml(bucket, prefix, folders, files, reqPath) {
+function generateIndexHtml(bucket, prefix, folders, files, reqPath, isTruncated = false) {
   const breadcrumbs = [];
   const pathParts = prefix ? prefix.split("/").filter(Boolean) : [];
   let currentPath = `/${bucket}`;
@@ -71,6 +72,10 @@ function generateIndexHtml(bucket, prefix, folders, files, reqPath) {
     rows.push(`<tr><td><a href="${filePath}">📄 ${fileName}</a></td><td>${size}</td></tr>`);
   }
 
+  const truncatedNotice = isTruncated
+    ? `<p class="notice">Showing first 1000 items. More objects exist in this directory.</p>`
+    : "";
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -83,6 +88,7 @@ function generateIndexHtml(bucket, prefix, folders, files, reqPath) {
     .breadcrumbs { color: #666; margin-bottom: 1.5rem; }
     .breadcrumbs a { color: #0066cc; text-decoration: none; }
     .breadcrumbs a:hover { text-decoration: underline; }
+    .notice { color: #856404; background: #fff3cd; padding: 0.75rem; border-radius: 4px; max-width: 900px; }
     table { border-collapse: collapse; width: 100%; max-width: 900px; }
     th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #ddd; background: #f5f5f5; }
     td { padding: 0.5rem; border-bottom: 1px solid #eee; }
@@ -95,6 +101,7 @@ function generateIndexHtml(bucket, prefix, folders, files, reqPath) {
 <body>
   <h1>Index of ${reqPath}</h1>
   <div class="breadcrumbs">${breadcrumbs.join(" / ")}</div>
+  ${truncatedNotice}
   <table>
     <thead>
       <tr><th>Name</th><th>Size</th></tr>
@@ -176,8 +183,8 @@ app.get(/.*/, async (req, res) => {
     // If no key or key ends with /, treat as directory
     if (!key || key.endsWith("/")) {
       const prefix = key || "";
-      const { folders, files } = await listS3Objects(bucket, prefix);
-      const html = generateIndexHtml(bucket, prefix, folders, files, req.path);
+      const { folders, files, isTruncated } = await listS3Objects(bucket, prefix);
+      const html = generateIndexHtml(bucket, prefix, folders, files, req.path, isTruncated);
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(html);
       return;
@@ -209,10 +216,10 @@ app.get(/.*/, async (req, res) => {
       if (status === 404 || err?.name === "NotFound" || err?.name === "NoSuchKey") {
         // File not found, try as directory
         const prefix = key.endsWith("/") ? key : key + "/";
-        const { folders, files } = await listS3Objects(bucket, prefix);
+        const { folders, files, isTruncated } = await listS3Objects(bucket, prefix);
 
         if (folders.length > 0 || files.length > 0) {
-          const html = generateIndexHtml(bucket, prefix, folders, files, req.path.endsWith("/") ? req.path : req.path + "/");
+          const html = generateIndexHtml(bucket, prefix, folders, files, req.path.endsWith("/") ? req.path : req.path + "/", isTruncated);
           res.setHeader("Content-Type", "text/html; charset=utf-8");
           res.send(html);
         } else {
