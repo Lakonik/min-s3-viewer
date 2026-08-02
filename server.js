@@ -22,22 +22,37 @@ function parseBucketAndKey(reqPath) {
   return { bucket, key };
 }
 
-async function listS3Objects(bucket, prefix) {
+// S3 continuation tokens only point forward, so remember where each token
+// came from to support "previous page" links. null means "came from page 1".
+const prevTokenMap = new Map();
+const PREV_TOKEN_MAP_LIMIT = 10000;
+
+function rememberPrevToken(nextToken, currentToken) {
+  if (!nextToken) return;
+  if (prevTokenMap.size >= PREV_TOKEN_MAP_LIMIT) prevTokenMap.clear();
+  prevTokenMap.set(nextToken, currentToken || null);
+}
+
+async function listS3Objects(bucket, prefix, continuationToken) {
   const result = await s3.send(
     new ListObjectsV2Command({
       Bucket: bucket,
       Prefix: prefix,
       Delimiter: "/",
+      ContinuationToken: continuationToken || undefined,
     })
   );
+  const nextToken = result.NextContinuationToken || null;
+  rememberPrevToken(nextToken, continuationToken);
   return {
     folders: result.CommonPrefixes || [],
     files: result.Contents || [],
     isTruncated: result.IsTruncated || false,
+    nextToken,
   };
 }
 
-function generateIndexHtml(bucket, prefix, folders, files, reqPath, isTruncated = false) {
+function generateIndexHtml(bucket, prefix, folders, files, reqPath, { nextToken = null, currentToken = null } = {}) {
   const breadcrumbs = [];
   const pathParts = prefix ? prefix.split("/").filter(Boolean) : [];
   let currentPath = `/${bucket}`;
@@ -72,8 +87,21 @@ function generateIndexHtml(bucket, prefix, folders, files, reqPath, isTruncated 
     rows.push(`<tr><td><a href="${filePath}">📄 ${fileName}</a></td><td>${size}</td></tr>`);
   }
 
-  const truncatedNotice = isTruncated
-    ? `<p class="notice">Showing first 1000 items. More objects exist in this directory.</p>`
+  const paginationLinks = [];
+  if (currentToken) {
+    paginationLinks.push(`<a href="${reqPath}">⇤ First page</a>`);
+    const prevToken = prevTokenMap.get(currentToken);
+    if (prevToken) {
+      paginationLinks.push(`<a href="${reqPath}?token=${encodeURIComponent(prevToken)}">← Previous page</a>`);
+    }
+    // prevToken === null means the previous page is page 1 (covered by First page);
+    // undefined means we never saw this token (e.g. server restart) — omit the link.
+  }
+  if (nextToken) {
+    paginationLinks.push(`<a href="${reqPath}?token=${encodeURIComponent(nextToken)}">Next page →</a>`);
+  }
+  const pagination = paginationLinks.length
+    ? `<div class="pagination">${paginationLinks.join("")}</div>`
     : "";
 
   return `<!DOCTYPE html>
@@ -88,7 +116,8 @@ function generateIndexHtml(bucket, prefix, folders, files, reqPath, isTruncated 
     .breadcrumbs { color: #666; margin-bottom: 1.5rem; }
     .breadcrumbs a { color: #0066cc; text-decoration: none; }
     .breadcrumbs a:hover { text-decoration: underline; }
-    .notice { color: #856404; background: #fff3cd; padding: 0.75rem; border-radius: 4px; max-width: 900px; }
+    .pagination { margin: 1rem 0; max-width: 900px; }
+    .pagination a { margin-right: 1rem; }
     table { border-collapse: collapse; width: 100%; max-width: 900px; }
     th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #ddd; background: #f5f5f5; }
     td { padding: 0.5rem; border-bottom: 1px solid #eee; }
@@ -101,7 +130,7 @@ function generateIndexHtml(bucket, prefix, folders, files, reqPath, isTruncated 
 <body>
   <h1>Index of ${reqPath}</h1>
   <div class="breadcrumbs">${breadcrumbs.join(" / ")}</div>
-  ${truncatedNotice}
+  ${pagination}
   <table>
     <thead>
       <tr><th>Name</th><th>Size</th></tr>
@@ -110,6 +139,7 @@ function generateIndexHtml(bucket, prefix, folders, files, reqPath, isTruncated 
       ${rows.join("\n      ")}
     </tbody>
   </table>
+  ${pagination}
 </body>
 </html>`;
 }
@@ -180,11 +210,13 @@ app.get(/.*/, async (req, res) => {
       return;
     }
 
+    const continuationToken = typeof req.query.token === "string" ? req.query.token : null;
+
     // If no key or key ends with /, treat as directory
     if (!key || key.endsWith("/")) {
       const prefix = key || "";
-      const { folders, files, isTruncated } = await listS3Objects(bucket, prefix);
-      const html = generateIndexHtml(bucket, prefix, folders, files, req.path, isTruncated);
+      const { folders, files, nextToken } = await listS3Objects(bucket, prefix, continuationToken);
+      const html = generateIndexHtml(bucket, prefix, folders, files, req.path, { nextToken, currentToken: continuationToken });
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(html);
       return;
@@ -216,10 +248,10 @@ app.get(/.*/, async (req, res) => {
       if (status === 404 || err?.name === "NotFound" || err?.name === "NoSuchKey") {
         // File not found, try as directory
         const prefix = key.endsWith("/") ? key : key + "/";
-        const { folders, files, isTruncated } = await listS3Objects(bucket, prefix);
+        const { folders, files, nextToken } = await listS3Objects(bucket, prefix, continuationToken);
 
         if (folders.length > 0 || files.length > 0) {
-          const html = generateIndexHtml(bucket, prefix, folders, files, req.path.endsWith("/") ? req.path : req.path + "/", isTruncated);
+          const html = generateIndexHtml(bucket, prefix, folders, files, req.path.endsWith("/") ? req.path : req.path + "/", { nextToken, currentToken: continuationToken });
           res.setHeader("Content-Type", "text/html; charset=utf-8");
           res.send(html);
         } else {
